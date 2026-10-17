@@ -1,0 +1,30 @@
+[project]
+name = "valutatrade-hub"
+version = "0.1.0"
+description = "Educational virtual currency wallet with users, portfolios and a CLI"
+readme = "README.md"
+authors = [{ name = "David Zakharyan" }]
+requires-python = ">=3.12"
+dependencies = ["prettytable>=3.18.0"]
+
+[project.scripts]
+valutatrade = "valutatrade_hub.cli.interface:main"
+
+[build-system]
+requires = ["uv_build>=0.12.21,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "valutatrade_hub"
+module-root = ""
+source-include = ["main.py", "Makefile", "tests/**"]
+
+[dependency-groups]
+dev = ["ruff>=0.16.10"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
