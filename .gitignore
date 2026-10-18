@@ -8,3 +8,4 @@ dist/
 data/*.json
 data/*.tmp
 *.cast
+logs/

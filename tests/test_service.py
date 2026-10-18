@@ -113,7 +113,7 @@ class ServiceTests(unittest.TestCase):
         self.service.deposit(200)
         self.service.login("alice", "1234")
         self.assertEqual(self.service.show_portfolio()["total"], 100)
-        with self.assertRaisesRegex(ValueError, "Неизвестная базовая"):
+        with self.assertRaisesRegex(ValueError, "Неизвестная валюта"):
             self.service.show_portfolio("ABC")
 
     def test_registration_rollback_on_second_write_error(self):
