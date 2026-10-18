@@ -4,6 +4,12 @@ import shlex
 
 from prettytable import PrettyTable
 
+from valutatrade_hub.core.currencies import CURRENCY_REGISTRY
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.usecases import WalletService
 
 COMMAND_OPTIONS = {
@@ -61,6 +67,7 @@ def print_help():
     print("buy --currency <код> --amount <количество валюты>")
     print("sell --currency <код> --amount <количество валюты>")
     print("get-rate --from <код> --to <код>")
+    print("Поддерживаемые валюты: " + ", ".join(sorted(CURRENCY_REGISTRY)))
     print("help | logout | exit\n")
 
 
@@ -153,6 +160,14 @@ class CommandInterface:
             try:
                 if not self.execute(input("> ")):
                     break
+            except InsufficientFundsError as error:
+                print(error)
+            except CurrencyNotFoundError as error:
+                print(error)
+                print("Поддерживаемые валюты: " + ", ".join(sorted(CURRENCY_REGISTRY)))
+            except ApiRequestError as error:
+                print(error)
+                print("Повторите позже или проверьте сеть/поставщика курсов.")
             except (ValueError, OSError) as error:
                 print(f"Ошибка: {error}")
             except (KeyError, TypeError) as error:

@@ -1,13 +1,16 @@
 """Сценарии регистрации, входа и управления виртуальным портфелем."""
 
 from valutatrade_hub.core.constants import PORTFOLIOS_FILE, USERS_FILE
+from valutatrade_hub.core.exceptions import InsufficientFundsError
 from valutatrade_hub.core.models import Portfolio, User
 from valutatrade_hub.core.utils import (
-    JsonStorage,
     RateService,
     validate_currency,
     validate_number,
 )
+from valutatrade_hub.decorators import log_action
+from valutatrade_hub.infra.database import DatabaseManager, storage_transaction
+from valutatrade_hub.infra.settings import SettingsLoader
 
 
 class WalletService:
@@ -15,7 +18,7 @@ class WalletService:
 
     def __init__(self, storage=None, rates=None):
         """Принимает заменяемые зависимости для хранилища и курсов."""
-        self.storage = storage if storage is not None else JsonStorage()
+        self.storage = storage if storage is not None else DatabaseManager()
         self.rates = rates if rates is not None else RateService(self.storage)
         self._current_user = None
 
@@ -24,6 +27,7 @@ class WalletService:
         """Возвращает текущего пользователя или None."""
         return self._current_user
 
+    @storage_transaction
     def register(self, username, password):
         """Создаёт пользователя и пустой портфель, не выполняя вход."""
         users = self.storage.load(USERS_FILE)
@@ -42,6 +46,7 @@ class WalletService:
             raise
         return user.get_user_info()
 
+    @storage_transaction
     def login(self, username, password):
         """Проверяет пароль и открывает сессию; неудачный вход сбрасывает её."""
         self._current_user = None
@@ -85,6 +90,7 @@ class WalletService:
                 return
         raise ValueError("Портфель пользователя не найден в хранилище")
 
+    @storage_transaction
     def deposit(self, amount):
         """Пополняет виртуальный USD-кошелёк, создавая его при необходимости."""
         portfolio = self._load_portfolio()
@@ -99,18 +105,19 @@ class WalletService:
         self._save_portfolio(portfolio)
         return {"before": before, "after": wallet.balance, "amount": amount}
 
+    @storage_transaction
     def get_rate(self, from_currency, to_currency):
         """Делегирует получение котировки единому сервису курсов."""
         return self.rates.get_rate(from_currency, to_currency)
 
-    def show_portfolio(self, base="USD"):
+    @storage_transaction
+    def show_portfolio(self, base=None):
         """Возвращает строки отчёта и общую стоимость по свежим котировкам."""
         portfolio = self._load_portfolio()
-        base = validate_currency(base)
-        try:
-            self.rates.get_rate(base, base)
-        except ValueError as error:
-            raise ValueError(f"Неизвестная базовая валюта '{base}'") from error
+        base = validate_currency(
+            SettingsLoader().get("default_base_currency") if base is None else base
+        )
+        self.rates.get_rate(base, base)
         rows = []
         sources = set()
         total = 0.0
@@ -128,6 +135,8 @@ class WalletService:
             "sources": sorted(sources),
         }
 
+    @log_action("BUY", verbose=True)
+    @storage_transaction
     def buy(self, currency, amount):
         """Покупает валюту за USD; списание и зачисление сохраняются вместе."""
         portfolio = self._load_portfolio()
@@ -138,7 +147,7 @@ class WalletService:
         quote = self.rates.get_rate(currency, "USD")
         cost = validate_number(amount * quote["rate"])
         if "USD" not in portfolio.wallets:
-            raise ValueError("Нет средств USD. Пополните: deposit --amount <сумма>")
+            raise InsufficientFundsError(0.0, cost, "USD")
         usd = portfolio.get_wallet("USD")
         wallet = (
             portfolio.get_wallet(currency)
@@ -149,7 +158,7 @@ class WalletService:
         after = validate_number(before + amount)
         usd_before = usd.balance
         usd.withdraw(cost)
-        wallet.balance = after
+        wallet.deposit(amount)
         self._save_portfolio(portfolio)
         return {
             "currency": currency,
@@ -162,6 +171,8 @@ class WalletService:
             "quote": quote,
         }
 
+    @log_action("SELL", verbose=True)
+    @storage_transaction
     def sell(self, currency, amount):
         """Продаёт валюту и начисляет выручку в USD одной записью портфеля."""
         portfolio = self._load_portfolio()
@@ -169,6 +180,8 @@ class WalletService:
         amount = validate_number(amount)
         if currency == "USD":
             raise ValueError("Продажа USD за USD не является обменом валют")
+        if currency not in portfolio.wallets:
+            raise InsufficientFundsError(0.0, amount, currency)
         wallet = portfolio.get_wallet(currency)
         before = wallet.balance
         wallet.withdraw(amount)

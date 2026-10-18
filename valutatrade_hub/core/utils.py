@@ -12,10 +12,12 @@ from valutatrade_hub.core.constants import (
     DEFAULT_USD_RATES,
     DEMO_SOURCE,
     PORTFOLIOS_FILE,
-    RATE_TTL_SECONDS,
     RATES_FILE,
     USERS_FILE,
 )
+from valutatrade_hub.core.currencies import get_currency
+from valutatrade_hub.core.exceptions import ApiRequestError
+from valutatrade_hub.infra.settings import SettingsLoader
 
 
 def utc_now():
@@ -25,12 +27,7 @@ def utc_now():
 
 def validate_currency(value):
     """Проверяет код валюты и возвращает его в верхнем регистре."""
-    if not isinstance(value, str):
-        raise ValueError("Код валюты должен быть непустой строкой")
-    code = value.strip().upper()
-    if not code or not code.isascii() or not code.isalpha():
-        raise ValueError("Код валюты должен состоять из латинских букв")
-    return code
+    return get_currency(value).code
 
 
 def validate_number(value, *, positive=True):
@@ -70,8 +67,11 @@ def demo_rate(from_currency, to_currency):
 class JsonStorage:
     """Хранит документы в заданной папке с атомарной заменой каждого файла."""
 
-    def __init__(self, data_dir=DATA_DIR):
+    def __init__(self, data_dir=DATA_DIR, filenames=None):
         """Создаёт отсутствующие файлы, не перезаписывая существующие данные."""
+        self._filenames = filenames or {
+            name: name for name in (USERS_FILE, PORTFOLIOS_FILE, RATES_FILE)
+        }
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         for filename, default in (
@@ -79,14 +79,14 @@ class JsonStorage:
             (PORTFOLIOS_FILE, []),
             (RATES_FILE, {}),
         ):
-            if not (self.data_dir / filename).exists():
+            if not (self.data_dir / self._filenames[filename]).exists():
                 self.save(filename, default)
 
     def load(self, filename):
         """Читает JSON и проверяет ожидаемый тип корневого объекта."""
         if filename not in {USERS_FILE, PORTFOLIOS_FILE, RATES_FILE}:
             raise ValueError("Неизвестный файл хранилища")
-        with (self.data_dir / filename).open(encoding="utf-8") as file:
+        with (self.data_dir / self._filenames[filename]).open(encoding="utf-8") as file:
             data = json.load(file)
         expected = dict if filename == RATES_FILE else list
         if not isinstance(data, expected):
@@ -111,7 +111,7 @@ class JsonStorage:
                 file.write(text)
                 file.flush()
                 os.fsync(file.fileno())
-            os.replace(temporary, self.data_dir / filename)
+            os.replace(temporary, self.data_dir / self._filenames[filename])
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
@@ -120,11 +120,13 @@ class JsonStorage:
 class RateService:
     """Возвращает прямые, обратные и кросс-курсы с проверкой свежести."""
 
-    def __init__(self, storage, provider=demo_rate, ttl=RATE_TTL_SECONDS):
+    def __init__(self, storage, provider=demo_rate, ttl=None):
         """Принимает заменяемый поставщик курса и время жизни кеша."""
         self.storage = storage
         self.provider = provider
-        self.ttl = ttl
+        self.ttl = SettingsLoader().get("rates_ttl_seconds") if ttl is None else ttl
+        if type(self.ttl) is not int or self.ttl <= 0:
+            raise ValueError("TTL должен быть положительным целым")
 
     def _fresh_quote(self, entry, default_source):
         """Возвращает пригодную запись кеша или None."""
@@ -162,13 +164,7 @@ class RateService:
         source = validate_currency(from_currency)
         target = validate_currency(to_currency)
         cache = self.storage.load(RATES_FILE)
-        known = set(DEFAULT_USD_RATES)
-        for key in cache:
-            if key.count("_") == 1 and isinstance(cache[key], dict):
-                known.update(key.split("_"))
         if source == target:
-            if source not in known:
-                raise ValueError(f"Курс {source}→{target} недоступен")
             quote = {
                 "rate": 1.0,
                 "updated_at": utc_now().isoformat(),
@@ -189,12 +185,16 @@ class RateService:
                 try:
                     entry = self.provider(source, target)
                     quote = self._fresh_quote(entry, "Provider")
-                except (ValueError, OSError, TimeoutError) as error:
-                    raise ValueError(
-                        f"Курс {source}→{target} недоступен. Повторите попытку позже."
+                except ApiRequestError:
+                    raise
+                except Exception as error:
+                    raise ApiRequestError(
+                        f"Курс {source}→{target} недоступен ({type(error).__name__})"
                     ) from error
                 if quote is None:
-                    raise ValueError(f"Курс {source}→{target} недоступен")
+                    raise ApiRequestError(
+                        f"Курс {source}→{target}: некорректный или устаревший ответ"
+                    )
                 cache[f"{source}_{target}"] = quote
                 cache["source"] = quote["source"]
                 cache["last_refresh"] = utc_now().isoformat()

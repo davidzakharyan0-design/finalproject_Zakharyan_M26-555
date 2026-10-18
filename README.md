@@ -1,6 +1,6 @@
 # ValutaTrade Hub
 
-Учебный валютный кошелёк — этапы 2.1 (модели) и 2.2 (CLI).
+Учебный валютный кошелёк: модели, CLI, иерархия валют, Singleton и логирование.
 Автор: David Zakharyan, группа М26-555.
 Репозиторий: `finalproject_Zakharyan_M26-555`.
 
@@ -87,7 +87,7 @@ RUB — 0.01016, ETH — 3720.0, USD — 1.0.
 
 `RateService.get_rate(from_currency, to_currency)` возвращает словарь:
 `from`, `to`, `rate`, `updated_at`, `source`.
-Сначала используется кеш моложе 300 секунд: прямая пара, обратная или кросс-курс
+Сначала используется кеш моложе `rates_ttl_seconds` (по умолчанию 300 секунд): прямая пара, обратная или кросс-курс
 через USD. Иначе вызывается заменяемый provider и обновляется кеш.
 Поставщик принимает два кода валют и возвращает `rate`, `updated_at`, `source`.
 Будущий Parser Service можно подключить через этот контракт.
@@ -112,9 +112,17 @@ data/rates.json       # Последние котировки и время об
 ```text
 valutatrade_hub/
 ├── __init__.py
+├── decorators.py
+├── logging_config.py
+├── infra/
+│   ├── __init__.py
+│   ├── settings.py
+│   └── database.py
 ├── core/
 │   ├── __init__.py
 │   ├── constants.py
+│   ├── currencies.py
+│   ├── exceptions.py
 │   ├── models.py
 │   ├── utils.py
 │   └── usecases.py
@@ -139,10 +147,108 @@ make lint
 make test
 make build
 uvx twine check dist/*
-uv tool install --force dist/valutatrade_hub-0.1.0-py3-none-any.whl
+uv tool install --force dist/valutatrade_hub-0.2.0-py3-none-any.whl
 valutatrade
 ```
 
-Тесты используют временные папки и не меняют рабочие данные. Они проверяют
+Тесты используют временные базы и не меняют рабочие портфели.
+Торговые сценарии могут создавать записи в локальном журнале `logs/`. Они проверяют
 модели, пароли, типы, сделки, изоляцию пользователей, восстановление после
 перезапуска, кеш и недоступность курсов.
+
+## Иерархия валют и ошибки
+
+`Currency` — абстрактный класс с методом `get_display_info()`.
+`FiatCurrency` добавляет `issuing_country`, `CryptoCurrency` — `algorithm` и
+`market_cap`. Названия непустые, коды объектов — 2–5 заглавных латинских букв.
+CLI нормализует регистр. `get_currency(code)` создаёт объект из реестра:
+USD, EUR, RUB, BTC, ETH. Капитализация криптовалют в реестре учебная.
+
+Примеры описаний:
+
+```text
+[FIAT] USD — US Dollar (Issuing: United States)
+[CRYPTO] BTC — Bitcoin (Algo: SHA-256, MCAP: 1.12e12)
+```
+
+| Команды | Исключение | Поведение CLI |
+| --- | --- | --- |
+| buy, sell | InsufficientFundsError | Доступный и требуемый баланс с кодом валюты |
+| buy, sell, get-rate, show-portfolio | CurrencyNotFoundError | Неизвестный код и список поддерживаемых валют |
+| buy, sell, get-rate, show-portfolio | ApiRequestError | Ошибка поставщика и предложение повторить позже / проверить сеть |
+
+Ошибочная сумма или формат кода вызывают `ValueError`. После ошибки CLI
+продолжает принимать команды. `Wallet.withdraw()` не меняет баланс при нехватке
+средств. Продажа без кошелька также вызывает `InsufficientFundsError` с балансом 0.
+Ошибки провайдера не заменяют старый кеш и не сохраняют изменения портфеля.
+
+## Конфигурация и Singleton
+
+`SettingsLoader` читает `[tool.valutatrade]` из `pyproject.toml` в текущей папке.
+Если файла нет (например, запуск установленного wheel вне проекта), использует
+значения по умолчанию. Относительные пути считаются от папки конфигурации.
+
+| Ключ | Значение по умолчанию |
+| --- | --- |
+| data_dir | data |
+| users_file / portfolios_file / rates_file | users.json / portfolios.json / rates.json |
+| rates_ttl_seconds | 300 |
+| default_base_currency | USD |
+| log_file | logs/actions.log |
+| log_format / log_level | json / INFO |
+| log_max_bytes / log_backup_count | 1048576 / 3 |
+
+`get(key, default=None)` читает значение, `reload()` проверяет и перечитывает
+настройки. При невалидном файле предыдущая конфигурация остаётся действующей.
+После изменения путей или TTL перезапустите CLI: существующие DatabaseManager
+и RateService сохраняют параметры, с которыми были созданы. Настройки логов
+применяются при следующем вызове `configure_logging()`.
+
+`SettingsLoader` и `DatabaseManager` используют `__new__` и `RLock`: в процессе
+создаётся ровно один экземпляр каждого класса, без инициализации при импорте.
+Повторное конструирование не очищает данные. `WalletService` по умолчанию
+использует DatabaseManager; тесты могут внедрять отдельный JsonStorage.
+
+`DatabaseManager.transaction()` сериализует сценарий чтение–изменение–запись
+в пределах одного процесса; файлы сохраняются через атомарную замену.
+Это не межпроцессная блокировка и не полноценная транзакция между JSON-файлами.
+Одновременно запускайте только один процесс приложения для одной базы.
+
+## Журнал операций
+
+`@log_action("BUY", verbose=True)` и `@log_action("SELL", verbose=True)`
+записывают успешные и неудачные сделки на уровне INFO и пробрасывают исключения.
+`functools.wraps` сохраняет имя и документацию обёрнутой функции.
+
+Формат — JSON Lines: одна JSON-запись на строку. Поля: `timestamp` (UTC ISO),
+`level`, `action`, `user_id`, `username`, `currency_code`, `amount`, `rate`,
+`base`, `result`. При ошибке добавляются `error_type`, `error_message`.
+Неизвестный на момент ошибки курс имеет значение `null`. Нечисловой или
+неконечный amount также записывается как `null`. `verbose=True` добавляет
+`context` с балансами до и после успешной сделки; без verbose контекста нет.
+Пароли, хеши и соли не включаются в журнал; register/login не журналируются.
+
+Файл `logs/actions.log` ротируется по достижении 1 МиБ, сохраняются три резервные
+копии. INFO — уровень по умолчанию, DEBUG можно указать в конфигурации.
+`logs/` исключён из Git. Повторная настройка не добавляет дублирующие обработчики.
+Если файл журнала нельзя открыть, сделка не начинается: CLI сообщает об ошибке.
+
+Проверка в приложении (с уже зарегистрированным alice):
+
+```text
+login --username alice --password 1234
+buy --currency EUR --amount 1
+sell --currency EUR --amount 1000000
+get-rate --from XYZ --to USD
+exit
+```
+
+Просмотр журнала после выхода в терминал:
+
+```bash
+tail -n 5 logs/actions.log
+```
+
+Новый набор тестов проверяет абстрактный интерфейс, фабрику валют, исключения,
+Singleton, пути конфигурации, reload, TTL, ротацию, поля журнала, конкурентные
+пополнения в одном процессе и восстановление CLI после ошибок.
