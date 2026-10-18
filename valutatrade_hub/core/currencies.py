@@ -27,6 +27,7 @@ class Currency(ABC):
     """Общий интерфейс валюты с валидируемыми публичными свойствами."""
 
     def __init__(self, name, code):
+        """Инициализирует и проверяет обязательные атрибуты валюты."""
         self.name = name
         self.code = code
 
@@ -37,6 +38,7 @@ class Currency(ABC):
 
     @name.setter
     def name(self, value):
+        """Проверяет непустое название перед изменением."""
         self._name = nonempty(value, "Название")
 
     @property
@@ -46,6 +48,7 @@ class Currency(ABC):
 
     @code.setter
     def code(self, value):
+        """Проверяет строгий формат кода перед изменением."""
         normalized = normalize_code(value)
         if value != normalized:
             raise ValueError("Код объекта валюты должен быть в верхнем регистре")
@@ -60,6 +63,7 @@ class FiatCurrency(Currency):
     """Фиатная валюта с указанием страны или зоны эмиссии."""
 
     def __init__(self, name, code, issuing_country):
+        """Инициализирует и проверяет обязательные атрибуты валюты."""
         super().__init__(name, code)
         self.issuing_country = nonempty(issuing_country, "Страна эмиссии")
 
@@ -72,6 +76,7 @@ class CryptoCurrency(Currency):
     """Криптовалюта с алгоритмом и последней известной капитализацией."""
 
     def __init__(self, name, code, algorithm, market_cap):
+        """Инициализирует и проверяет обязательные атрибуты валюты."""
         super().__init__(name, code)
         self.algorithm = nonempty(algorithm, "Алгоритм")
         if (

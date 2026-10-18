@@ -57,6 +57,7 @@ def storage_transaction(function):
 
     @wraps(function)
     def wrapped(self, *args, **kwargs):
+        """Выполняет сценарий внутри блокировки выбранного хранилища."""
         transaction = getattr(self.storage, "transaction", nullcontext)
         with transaction():
             return function(self, *args, **kwargs)
