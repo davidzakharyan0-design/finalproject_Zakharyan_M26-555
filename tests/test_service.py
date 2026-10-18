@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import Mock
 
+from tests.helpers import seed_rates
 from valutatrade_hub.core.constants import PORTFOLIOS_FILE, RATES_FILE, USERS_FILE
 from valutatrade_hub.core.usecases import WalletService
 from valutatrade_hub.core.utils import JsonStorage, RateService, utc_now
@@ -16,6 +17,7 @@ class ServiceTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.storage = JsonStorage(self.directory.name)
+        seed_rates(self.storage)
         self.service = WalletService(self.storage)
 
     def register_login(self):

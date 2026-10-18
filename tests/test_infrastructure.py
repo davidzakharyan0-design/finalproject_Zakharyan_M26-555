@@ -11,6 +11,7 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from tests.helpers import seed_rates
 from valutatrade_hub.cli.interface import CommandInterface
 from valutatrade_hub.core.constants import PORTFOLIOS_FILE, RATES_FILE, USERS_FILE
 from valutatrade_hub.core.currencies import (
@@ -108,6 +109,7 @@ class InfrastructureTests(unittest.TestCase):
             handler.close()
 
     def service(self):
+        seed_rates(self.database)
         service = WalletService()
         service.register("alice", "secret-password")
         service.login("alice", "secret-password")
@@ -211,6 +213,7 @@ class InfrastructureTests(unittest.TestCase):
 
     def test_cli_domain_errors_recover(self):
         service = self.service()
+        self.database.save(RATES_FILE, {})
         service.rates.provider = Mock(side_effect=OSError("offline"))
         output = io.StringIO()
         commands = [
