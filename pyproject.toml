@@ -1,14 +1,18 @@
 [project]
 name = "valutatrade-hub"
-version = "0.2.0"
+version = "0.3.0"
 description = "Educational virtual currency wallet with users, portfolios and a CLI"
 readme = "README.md"
 authors = [{ name = "David Zakharyan" }]
 requires-python = ">=3.12"
-dependencies = ["prettytable>=3.18.0"]
+dependencies = [
+    "prettytable>=3.18.0",
+    "requests>=2.34.2",
+]
 
 [project.scripts]
 valutatrade = "valutatrade_hub.cli.interface:main"
+valutatrade-parser = "valutatrade_hub.parser_service.scheduler:main"
 
 [build-system]
 requires = ["uv_build>=0.12.21,<0.13.0"]

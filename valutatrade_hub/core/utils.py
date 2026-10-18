@@ -97,31 +97,38 @@ class JsonStorage:
         """Пишет временный файл и заменяет целевой только после успешной записи."""
         if filename not in {USERS_FILE, PORTFOLIOS_FILE, RATES_FILE}:
             raise ValueError("Неизвестный файл хранилища")
-        text = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=self.data_dir,
-                suffix=".tmp",
-                delete=False,
-            ) as file:
-                temporary = Path(file.name)
-                file.write(text)
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temporary, self.data_dir / self._filenames[filename])
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+        atomic_write_json(self.data_dir / self._filenames[filename], data)
+
+
+def atomic_write_json(path, data):
+    """Сериализует до записи и атомарно заменяет один JSON-документ."""
+    path = Path(path)
+    text = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            suffix=".tmp",
+            delete=False,
+        ) as file:
+            temporary = Path(file.name)
+            file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 class RateService:
     """Возвращает прямые, обратные и кросс-курсы с проверкой свежести."""
 
-    def __init__(self, storage, provider=demo_rate, ttl=None):
-        """Принимает заменяемый поставщик курса и время жизни кеша."""
+    def __init__(self, storage, provider=None, ttl=None):
+        """Читает кеш; provider предназначен для изолированных тестов."""
         self.storage = storage
         self.provider = provider
         self.ttl = SettingsLoader().get("rates_ttl_seconds") if ttl is None else ttl
@@ -131,6 +138,8 @@ class RateService:
     def _fresh_quote(self, entry, default_source):
         """Возвращает пригодную запись кеша или None."""
         if not isinstance(entry, dict):
+            return None
+        if self.provider is None and entry.get("source") == "DemoStub":
             return None
         try:
             rate = validate_number(entry["rate"])
@@ -163,7 +172,7 @@ class RateService:
         """Возвращает словарь from/to/rate/updated_at/source."""
         source = validate_currency(from_currency)
         target = validate_currency(to_currency)
-        cache = self.storage.load(RATES_FILE)
+        cache = self.snapshot()["pairs"]
         if source == target:
             quote = {
                 "rate": 1.0,
@@ -182,6 +191,11 @@ class RateService:
                         "source": f"{left['source']}/{right['source']}",
                     }
             if quote is None:
+                if self.provider is None:
+                    raise ApiRequestError(
+                        f"Курс {source}→{target} отсутствует или устарел. "
+                        "Выполните 'update-rates'."
+                    )
                 try:
                     entry = self.provider(source, target)
                     quote = self._fresh_quote(entry, "Provider")
@@ -196,7 +210,91 @@ class RateService:
                         f"Курс {source}→{target}: некорректный или устаревший ответ"
                     )
                 cache[f"{source}_{target}"] = quote
-                cache["source"] = quote["source"]
-                cache["last_refresh"] = utc_now().isoformat()
-                self.storage.save(RATES_FILE, cache)
+                self.storage.save(
+                    RATES_FILE, {"pairs": cache, "last_refresh": utc_now().isoformat()}
+                )
         return {"from": source, "to": target, **quote}
+
+    def snapshot(self):
+        """Читает новый формат и старые плоские пары; не меняет файлы."""
+        try:
+            document = self.storage.load(RATES_FILE)
+        except FileNotFoundError:
+            document = {}
+        pairs = document.get("pairs", document)
+        if not isinstance(pairs, dict):
+            raise ValueError("Неверная структура кеша: pairs")
+        return {
+            "pairs": {
+                key: {"source": document.get("source", "Cache"), **value}
+                for key, value in pairs.items()
+                if "_" in key and isinstance(value, dict)
+            },
+            "last_refresh": document.get("last_refresh"),
+        }
+
+    def list_rates(self, currency=None, top=None, base="USD"):
+        """Возвращает только свежие курсы, фильтр валюты и top криптовалют по цене."""
+        from valutatrade_hub.core.currencies import (
+            CryptoCurrency,
+            get_currency,
+            normalize_code,
+        )
+
+        base = get_currency(base).code
+        if currency is not None:
+            currency = normalize_code(currency)
+        if top is not None and (type(top) is not int or top <= 0):
+            raise ValueError("top должен быть положительным целым числом")
+        snapshot = self.snapshot()
+        pairs = snapshot["pairs"]
+        if not pairs:
+            raise ValueError(
+                "Локальный кеш курсов пуст. Выполните 'update-rates', "
+                "чтобы загрузить данные."
+            )
+        codes = set()
+        for pair in pairs:
+            codes.update(pair.split("_"))
+        if currency is not None and currency not in codes:
+            raise ValueError(f"Курс для '{currency}' не найден в кеше")
+        rows, skipped = [], 0
+        for code in sorted(codes):
+            if currency is not None and code != currency:
+                continue
+            if code == base and currency is None:
+                continue
+            if top is not None and not isinstance(get_currency(code), CryptoCurrency):
+                continue
+            # Не зовём provider: show-rates всегда работает только с локальным кешем.
+            quote = self._cached(pairs, code, base)
+            if quote is None and code == base:
+                quote = {
+                    "rate": 1.0,
+                    "updated_at": utc_now().isoformat(),
+                    "source": "Identity",
+                }
+            if quote is None and code != "USD" and base != "USD":
+                left, right = (
+                    self._cached(pairs, code, "USD"),
+                    self._cached(pairs, base, "USD"),
+                )
+                if left and right:
+                    quote = {
+                        "rate": validate_number(left["rate"] / right["rate"]),
+                        "updated_at": min(left["updated_at"], right["updated_at"]),
+                        "source": f"{left['source']}/{right['source']}",
+                    }
+            if quote is None:
+                skipped += 1
+                continue
+            rows.append({"pair": f"{code}_{base}", **quote})
+        if not rows:
+            raise ValueError("Нет подходящих свежих курсов. Выполните 'update-rates'.")
+        if top is not None:
+            rows = sorted(rows, key=lambda row: (-row["rate"], row["pair"]))[:top]
+        return {
+            "rows": rows,
+            "skipped": skipped,
+            "last_refresh": snapshot["last_refresh"],
+        }

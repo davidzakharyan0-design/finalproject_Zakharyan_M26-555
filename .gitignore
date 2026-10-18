@@ -9,3 +9,6 @@ data/*.json
 data/*.tmp
 *.cast
 logs/
+data/*.lock
+.env
+.env.*

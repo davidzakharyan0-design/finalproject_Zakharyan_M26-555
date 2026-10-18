@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from tests.helpers import seed_rates
 from valutatrade_hub.cli.interface import CommandInterface, parse_command
 from valutatrade_hub.core.usecases import WalletService
 from valutatrade_hub.core.utils import JsonStorage
@@ -35,7 +36,9 @@ class CliTests(unittest.TestCase):
 
     def test_loop_recovers_and_no_password_echo(self):
         with tempfile.TemporaryDirectory() as directory:
-            interface = CommandInterface(WalletService(JsonStorage(directory)))
+            storage = JsonStorage(directory)
+            seed_rates(storage)
+            interface = CommandInterface(WalletService(storage))
             commands = [
                 "register --username alice --password secret-phrase",
                 "buy --currency BTC --amount 1",
@@ -52,11 +55,12 @@ class CliTests(unittest.TestCase):
             text = output.getvalue()
             self.assertIn("Сначала выполните login", text)
             self.assertIn("Покупка выполнена", text)
-            self.assertIn("DemoStub", text)
+            self.assertIn("Fixture", text)
             self.assertNotIn("secret-phrase", text)
 
     def test_separate_process_persistence(self):
         with tempfile.TemporaryDirectory() as directory:
+            seed_rates(JsonStorage(os.path.join(directory, "data")))
             root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             environment = {**os.environ, "PYTHONPATH": root}
             command = [sys.executable, os.path.join(root, "main.py")]

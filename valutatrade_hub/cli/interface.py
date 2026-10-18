@@ -20,6 +20,8 @@ COMMAND_OPTIONS = {
     "buy": ({"currency", "amount"}, set()),
     "sell": ({"currency", "amount"}, set()),
     "get-rate": ({"from", "to"}, set()),
+    "update-rates": (set(), {"source"}),
+    "show-rates": (set(), {"currency", "top", "base"}),
     "help": (set(), set()),
     "logout": (set(), set()),
     "exit": (set(), set()),
@@ -53,13 +55,20 @@ def parse_command(text):
             options["amount"] = float(options["amount"])
         except ValueError as error:
             raise ValueError("'amount' должен быть положительным числом") from error
+    if "top" in options:
+        try:
+            options["top"] = int(options["top"])
+            if options["top"] <= 0:
+                raise ValueError
+        except ValueError:
+            raise ValueError("top должен быть положительным целым числом") from None
     return command, options
 
 
 def print_help():
     """Печатает команды текущего этапа."""
     print("\nValutaTrade Hub — виртуальный валютный кошелёк")
-    print("Курсы DemoStub учебные и не являются актуальными рыночными котировками.")
+    print("Курсы читаются из кеша. Для загрузки из API выполните update-rates.")
     print("register --username <имя> --password <пароль>")
     print("login --username <имя> --password <пароль>")
     print("deposit --amount <сумма USD> — пополнение виртуального баланса")
@@ -67,6 +76,8 @@ def print_help():
     print("buy --currency <код> --amount <количество валюты>")
     print("sell --currency <код> --amount <количество валюты>")
     print("get-rate --from <код> --to <код>")
+    print("update-rates [--source coingecko|exchangerate]")
+    print("show-rates [--currency <код>] [--top <N>] [--base <код>]")
     print("Поддерживаемые валюты: " + ", ".join(sorted(CURRENCY_REGISTRY)))
     print("help | logout | exit\n")
 
@@ -143,6 +154,38 @@ class CommandInterface:
             )
             print(f"Стоимость сделки: {result['value']:,.2f} USD")
             print(f"Источник курса: {result['quote']['source']}")
+        elif command == "update-rates":
+            from valutatrade_hub.parser_service.updater import RatesUpdater
+
+            print("Обновление курсов...")
+            result = RatesUpdater().run_update(**options)
+            print(
+                f"Обновлено пар: {result['updated']}. "
+                f"Последнее обновление: {result['last_refresh']}"
+            )
+            if result["errors"]:
+                print("Обновление завершено частично:")
+                for error in result["errors"]:
+                    print(error)
+                print("Подробности: logs/parser.log (или настроенный путь).")
+        elif command == "show-rates":
+            result = self.service.rates.list_rates(**options)
+            table = PrettyTable(["Пара", "Курс", "Получено (UTC)", "Источник"])
+            for row in result["rows"]:
+                table.add_row(
+                    [
+                        row["pair"],
+                        f"{row['rate']:.8f}",
+                        row["updated_at"],
+                        row["source"],
+                    ]
+                )
+            print(table)
+            if result["skipped"]:
+                print(
+                    f"Пропущено устаревших/недоступных пар: {result['skipped']}. "
+                    "Выполните update-rates."
+                )
         elif command == "get-rate":
             quote = self.service.get_rate(options["from"], options["to"])
             print(
