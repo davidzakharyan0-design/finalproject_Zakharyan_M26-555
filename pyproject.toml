@@ -21,7 +21,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "valutatrade_hub"
 module-root = ""
-source-include = ["main.py", "Makefile", "tests/**"]
+source-include = ["main.py", "Makefile", "tests/**", "docs/**"]
 
 [dependency-groups]
 dev = ["ruff>=0.16.10"]

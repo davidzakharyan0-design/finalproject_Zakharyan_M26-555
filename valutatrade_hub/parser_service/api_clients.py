@@ -29,6 +29,7 @@ class BaseApiClient(ABC):
     source_key = "api"
 
     def __init__(self, config=None, session=None):
+        """Принимает конфигурацию и заменяемый HTTP-клиент."""
         self.config = config or ParserConfig()
         self.session = session or requests
         self.observed_at = None

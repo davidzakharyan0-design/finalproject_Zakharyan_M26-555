@@ -12,7 +12,11 @@ from valutatrade_hub.parser_service.api_clients import (
     CoinGeckoClient,
     ExchangeRateApiClient,
 )
-from valutatrade_hub.parser_service.config import ParserConfig
+from valutatrade_hub.parser_service.config import (
+    PARSER_LOG_BACKUP_COUNT,
+    PARSER_LOG_MAX_BYTES,
+    ParserConfig,
+)
 from valutatrade_hub.parser_service.storage import RatesStorage, utc_timestamp
 
 _LOG_LOCK = RLock()
@@ -26,7 +30,10 @@ def parser_logger(config):
         if not logger.handlers:
             path.parent.mkdir(parents=True, exist_ok=True)
             handler = RotatingFileHandler(
-                path, maxBytes=1048576, backupCount=3, encoding="utf-8"
+                path,
+                maxBytes=PARSER_LOG_MAX_BYTES,
+                backupCount=PARSER_LOG_BACKUP_COUNT,
+                encoding="utf-8",
             )
             handler.setFormatter(ActionFormatter())
             logger.addHandler(handler)
@@ -39,6 +46,7 @@ class RatesUpdater:
     """Принимает клиентов и хранилище; сбой источника не отменяет другие ответы."""
 
     def __init__(self, clients=None, storage=None, config=None):
+        """Принимает источники, хранилище и конфигурацию обновления."""
         self.config = config or ParserConfig()
         self.clients = (
             clients

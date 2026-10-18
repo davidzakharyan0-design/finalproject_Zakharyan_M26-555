@@ -4,7 +4,11 @@ import argparse
 import time
 
 from valutatrade_hub.core.exceptions import ApiRequestError
-from valutatrade_hub.parser_service.config import UPDATE_INTERVAL
+from valutatrade_hub.parser_service.config import (
+    MAX_UPDATE_INTERVAL,
+    MIN_UPDATE_INTERVAL,
+    UPDATE_INTERVAL,
+)
 from valutatrade_hub.parser_service.updater import RatesUpdater
 
 
@@ -12,7 +16,10 @@ def run_scheduler(
     updater, interval=UPDATE_INTERVAL, source=None, *, cycles=None, sleep=time.sleep
 ):
     """Обновляет последовательно; ждёт интервал после ответа, включая ошибку API."""
-    if type(interval) not in (int, float) or not 60 <= interval <= 86400:
+    if (
+        type(interval) not in (int, float)
+        or not MIN_UPDATE_INTERVAL <= interval <= MAX_UPDATE_INTERVAL
+    ):
         raise ValueError("Интервал должен быть от 60 до 86400 секунд")
     count = 0
     while cycles is None or count < cycles:

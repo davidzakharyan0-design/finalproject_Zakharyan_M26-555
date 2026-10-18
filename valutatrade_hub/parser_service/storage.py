@@ -46,6 +46,7 @@ class RatesStorage:
     _thread_lock = RLock()
 
     def __init__(self, config=None):
+        """Определяет согласованные пути снимка и истории."""
         self.config = config or ParserConfig()
         self.rates_path = Path(self.config.RATES_FILE_PATH)
         self.history_path = Path(self.config.HISTORY_FILE_PATH)

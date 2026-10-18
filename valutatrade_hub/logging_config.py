@@ -17,6 +17,7 @@ class ActionFormatter(logging.Formatter):
     """Одна JSON-запись на строку, без traceback и произвольных аргументов."""
 
     def format(self, record):
+        """Сериализует событие с временем UTC в одну строку JSON."""
         payload = {
             "timestamp": datetime.fromtimestamp(
                 record.created, timezone.utc

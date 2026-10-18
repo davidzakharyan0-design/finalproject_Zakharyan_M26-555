@@ -22,10 +22,12 @@ def log_action(action=None, *, verbose=False):
     """Добавляет INFO-запись результата; никогда не сохраняет пароль или соль."""
 
     def decorate(function):
+        """Оборачивает выбранную функцию журналированием."""
         signature = inspect.signature(function)
 
         @wraps(function)
         def wrapped(self, *args, **kwargs):
+            """Записывает исход операции и сохраняет исходное исключение."""
             logger = configure_logging()
             bound = signature.bind(self, *args, **kwargs).arguments
             user = self.current_user
